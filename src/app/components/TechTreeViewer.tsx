@@ -41,8 +41,7 @@ import {
   escapeRegExp,
   cleanLocationForTooltip,
   validateImageUrl,
-  fetchWithRetry,
-  throttle
+  fetchWithRetry
 } from './utils/helpers';
 import {
   performanceMarks,
@@ -521,15 +520,39 @@ export function TechTreeViewer() {
     }
   }, [containerDimensions.width, containerDimensions.height, isSmallScreen, isClient]);
 
+  const minNodeYear = useMemo(() => {
+    if (!data.nodes.length) return null;
+    let min = Infinity;
+    for (const node of data.nodes) {
+      if (node.year < min) min = node.year;
+    }
+    return min;
+  }, [data.nodes]);
+
+  // calculateXPosition walks the timeline interval by interval (~550 iterations
+  // from the earliest year), and getXPosition is called once per node per
+  // render — including once per node for the minimap. Cache by year: there are
+  // only a few thousand distinct years, and the answer only moves when the
+  // earliest year does.
+  const xPositionCacheRef = useRef<Map<number, number>>(new Map());
+  const xPositionCacheKeyRef = useRef<number | null>(minNodeYear);
+  if (xPositionCacheKeyRef.current !== minNodeYear) {
+    xPositionCacheKeyRef.current = minNodeYear;
+    xPositionCacheRef.current = new Map();
+  }
+
   const getXPosition = useCallback(
     (year: number) => {
-      // Still calculate minYear from data for node positioning
       // Return 0 if data isn't loaded yet to avoid errors
-      if (!data.nodes.length) return 0;
-      const minYear = Math.min(...data.nodes.map((n) => n.year));
-      return calculateXPosition(year, minYear, PADDING, YEAR_WIDTH);
+      if (minNodeYear === null) return 0;
+      const cache = xPositionCacheRef.current;
+      const cached = cache.get(year);
+      if (cached !== undefined) return cached;
+      const x = calculateXPosition(year, minNodeYear, PADDING, YEAR_WIDTH);
+      cache.set(year, x);
+      return x;
     },
-    [data.nodes]
+    [minNodeYear]
   );
 
   const calculateNodePositions = useCallback(
@@ -799,9 +822,9 @@ export function TechTreeViewer() {
         // In production, check cache first
         const cachedData = await cacheManager.get();
         
-        if (cachedData?.detailData) {
+        if (cachedData?.data) {
           // If we have detailed data in cache, use it
-          const validatedNodes = cachedData.detailData.nodes?.map((node: TechNode) => ({
+          const validatedNodes = cachedData.data.nodes?.map((node: TechNode) => ({
             ...node,
             // Only validate image URLs if we're showing images
             image: showImages ? validateImageUrl(node.image) : undefined
@@ -815,7 +838,7 @@ export function TechTreeViewer() {
           
           setData({ 
             nodes: positionedDetailNodes, 
-            links: cachedData.detailData.links || [] 
+            links: cachedData.data.links || []
           });
           currentNodesRef.current = positionedDetailNodes;
 
@@ -860,8 +883,7 @@ export function TechTreeViewer() {
         await cacheManager.set({
           version: CACHE_VERSION,
           timestamp: Date.now(),
-          basicData: detailData,
-          detailData: detailData
+          data: detailData
         });
 
         // Update spatial index
@@ -1240,6 +1262,20 @@ export function TechTreeViewer() {
         : DEFAULT_TIMELINE_MAX_YEAR,
     [data.nodes]
   );
+  // Rebuilt only when the node set changes, not on every scroll — the minimap
+  // renders one element per node, so an unstable array prop meant re-rendering
+  // ~2,500 dots on every scroll frame.
+  const minimapNodes = useMemo<TechTreeMinimapNode[]>(
+    () =>
+      data.nodes.map((node) => ({
+        id: node.id,
+        x: getXPosition(node.year),
+        y: node.y || 0,
+        year: node.year,
+      })),
+    [data.nodes, getXPosition]
+  );
+
   const nodeById = useMemo(
     () => new Map(data.nodes.map((node) => [node.id, node])),
     [data.nodes]
@@ -1640,33 +1676,6 @@ export function TechTreeViewer() {
     },
     [data.links, data.nodes]
   );
-
-  useEffect(() => {
-    const style = document.createElement("style");
-    style.textContent = `
-      .fast-smooth-scroll {
-        scroll-behavior: smooth;
-        scroll-timeline: none;
-        scroll-behavior-instant-stop: true;
-      }
-  
-      .scrolling .tech-node,
-      .scrolling path,
-      .scrolling .connection,
-      .scrolling g,
-      .scrolling line,
-      .scrolling circle,
-      .scrolling rect,
-      .scrolling text {
-        pointer-events: none !important;
-      }
-    `;
-    document.head.appendChild(style);
-
-    return () => {
-      document.head.removeChild(style);
-    };
-  }, []);
 
   // Keyboard shortcut to left and right ends (cmd+arrows)
   useEffect(() => {
@@ -2258,102 +2267,96 @@ export function TechTreeViewer() {
     [data.links]
   );
 
-  // Add these helper functions near your other utility functions
-  const getAllAncestors = useCallback(
-    (nodeId: string, visited = new Set<string>()): Set<string> => {
-      performanceMarks.start('getAllAncestors');
-      
-      // Check cache first
-      if (ancestorsCache.current.has(nodeId)) {
-        const cached = ancestorsCache.current.get(nodeId)!;
-        performanceMarks.end('getAllAncestors');
-        performanceMarks.log('getAllAncestors');
-        return cached;
+  // Lineage follows "built upon" style edges only: sideways relationships say
+  // two things arose separately, not that one descends from the other.
+  const NON_LINEAGE_LINK_TYPES = useMemo(
+    () => new Set(["Independently invented", "Concurrent development"]),
+    []
+  );
+
+  // Adjacency built once per data set, so a traversal is a map lookup per step
+  // instead of a full scan of all ~3,900 links per node.
+  const { parentsByNode, childrenByNode } = useMemo(() => {
+    const parents = new Map<string, string[]>();
+    const children = new Map<string, string[]>();
+
+    for (const link of data.links) {
+      if (NON_LINEAGE_LINK_TYPES.has(link.type)) continue;
+
+      const existingParents = parents.get(link.target);
+      if (existingParents) existingParents.push(link.source);
+      else parents.set(link.target, [link.source]);
+
+      const existingChildren = children.get(link.source);
+      if (existingChildren) existingChildren.push(link.target);
+      else children.set(link.source, [link.target]);
+    }
+
+    return { parentsByNode: parents, childrenByNode: children };
+  }, [data.links, NON_LINEAGE_LINK_TYPES]);
+
+  // Everything reachable from startId, excluding startId itself. Each call
+  // builds its own result set: the previous version threaded one shared
+  // accumulator through the recursion and then cached that same set under
+  // every node it passed through, so asking about one node returned the
+  // lineage of whichever node had been asked about first.
+  const collectReachable = useCallback(
+    (startId: string, adjacency: Map<string, string[]>): Set<string> => {
+      const result = new Set<string>();
+      const stack = [startId];
+
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        const next = adjacency.get(current);
+        if (!next) continue;
+
+        for (const id of next) {
+          // Skipping startId also keeps cycles through it from looping.
+          if (id === startId || result.has(id)) continue;
+          result.add(id);
+          stack.push(id);
+        }
       }
-      
-      if (visited.has(nodeId)) {
-        performanceMarks.end('getAllAncestors');
-        performanceMarks.log('getAllAncestors');
-        return visited;
-      }
-      visited.add(nodeId);
 
-      // Find all direct ancestors
-      const directAncestors = data.links
-        .filter(
-          (link) =>
-            link.target === nodeId &&
-            !["Independently invented", "Concurrent development"].includes(
-              link.type
-            )
-        )
-        .map((link) => link.source);
-
-      // Recursively get ancestors of ancestors
-      directAncestors.forEach((ancestorId) => {
-        getAllAncestors(ancestorId, visited);
-      });
-
-      // Cache the result
-      ancestorsCache.current.set(nodeId, visited);
-      
-      performanceMarks.end('getAllAncestors');
-      performanceMarks.log('getAllAncestors');
-      return visited;
+      return result;
     },
-    [data.links]
+    []
+  );
+
+  // Caches are invalidated during render rather than in an effect, so a render
+  // that lands between new data and the effect can't serve stale lineage.
+  const lineageCacheKeyRef = useRef(data.links);
+  if (lineageCacheKeyRef.current !== data.links) {
+    lineageCacheKeyRef.current = data.links;
+    ancestorsCache.current.clear();
+    descendantsCache.current.clear();
+  }
+
+  // Callers must treat the result as read-only: it is the cached instance, and
+  // the minimap compares these sets by reference.
+  const getAllAncestors = useCallback(
+    (nodeId: string): Set<string> => {
+      const cached = ancestorsCache.current.get(nodeId);
+      if (cached) return cached;
+
+      const result = collectReachable(nodeId, parentsByNode);
+      ancestorsCache.current.set(nodeId, result);
+      return result;
+    },
+    [collectReachable, parentsByNode]
   );
 
   const getAllDescendants = useCallback(
-    (nodeId: string, visited = new Set<string>()): Set<string> => {
-      performanceMarks.start('getAllDescendants');
-      
-      // Check cache first
-      if (descendantsCache.current.has(nodeId)) {
-        const cached = descendantsCache.current.get(nodeId)!;
-        performanceMarks.end('getAllDescendants');
-        performanceMarks.log('getAllDescendants');
-        return cached;
-      }
-      
-      if (visited.has(nodeId)) {
-        performanceMarks.end('getAllDescendants');
-        performanceMarks.log('getAllDescendants');
-        return visited;
-      }
-      visited.add(nodeId);
+    (nodeId: string): Set<string> => {
+      const cached = descendantsCache.current.get(nodeId);
+      if (cached) return cached;
 
-      // Find all direct descendants
-      const directDescendants = data.links
-        .filter(
-          (link) =>
-            link.source === nodeId &&
-            !["Independently invented", "Concurrent development"].includes(
-              link.type
-            )
-        )
-        .map((link) => link.target);
-
-      // Recursively get descendants of descendants
-      directDescendants.forEach((descendantId) => {
-        getAllDescendants(descendantId, visited);
-      });
-
-      // Cache the result
-      descendantsCache.current.set(nodeId, visited);
-      
-      performanceMarks.end('getAllDescendants');
-      performanceMarks.log('getAllDescendants');
-      return visited;
+      const result = collectReachable(nodeId, childrenByNode);
+      descendantsCache.current.set(nodeId, result);
+      return result;
     },
-    [data.links]
+    [childrenByNode, collectReachable]
   );
-
-  // Add cleanup for caches when data changes
-  useEffect(() => {
-    descendantsCache.current.clear();
-    ancestorsCache.current.clear();
-  }, [data.links]);
 
   // Remove unused touch handlers
   useEffect(() => {
@@ -2516,6 +2519,35 @@ export function TechTreeViewer() {
     return () => {
       if (viewportUpdateTimeoutRef.current) {
         clearTimeout(viewportUpdateTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Scroll position drives the minimap viewport rect, so it has to stay in
+  // sync, but a wheel or trackpad can fire scroll events faster than the
+  // browser paints. Coalescing to one state update per animation frame bounds
+  // the work without ever lagging behind the real scroll position: the handler
+  // reads scrollLeft/scrollTop at frame time, not at event time.
+  const scrollFrameRef = useRef<number | null>(null);
+  const handleContainerScroll = useCallback(() => {
+    if (isPinchingRef.current) return;
+    if (scrollFrameRef.current !== null) return;
+
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const container = horizontalScrollContainerRef.current;
+      if (!container) return;
+      setScrollPosition({
+        left: container.scrollLeft,
+        top: container.scrollTop,
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current);
       }
     };
   }, []);
@@ -3447,15 +3479,7 @@ useEffect(() => {
           } : {}),
         }}
         onMouseDown={posterMode ? undefined : handleMouseDown}
-        onScroll={posterMode ? undefined : throttle((e) => {
-            if (isPinchingRef.current) return;
-            const horizontalScroll = e.currentTarget.scrollLeft;
-            const verticalScroll = e.currentTarget.scrollTop;
-            setScrollPosition({
-              left: horizontalScroll,
-              top: verticalScroll,
-            });
-          }, 100)} // Throttle to max once every 100ms
+        onScroll={posterMode ? undefined : handleContainerScroll}
       >
         <div
           ref={treeShellRef}
@@ -4208,7 +4232,6 @@ useEffect(() => {
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             const ancestors = getAllAncestors(nodeId);
-                                            ancestors.delete(nodeId);
                                             if (!selectedNodeId) {
                                               setSelectedNodeId(nodeId);
                                             }
@@ -4224,7 +4247,6 @@ useEffect(() => {
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             const descendants = getAllDescendants(nodeId);
-                                            descendants.delete(nodeId);
                                             if (!selectedNodeId) {
                                               setSelectedNodeId(nodeId);
                                             }
@@ -4243,7 +4265,6 @@ useEffect(() => {
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             const ancestors = getAllAncestors(nodeId);
-                                            ancestors.delete(nodeId);
                                             if (!selectedNodeId) {
                                               setSelectedNodeId(nodeId);
                                             }
@@ -4262,7 +4283,6 @@ useEffect(() => {
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             const descendants = getAllDescendants(nodeId);
-                                            descendants.delete(nodeId);
                                             if (!selectedNodeId) {
                                               setSelectedNodeId(nodeId);
                                             }
@@ -4316,14 +4336,7 @@ useEffect(() => {
             }}
           >
             <TechTreeMinimap
-              nodes={data.nodes.map(
-                (node): TechTreeMinimapNode => ({
-                  id: node.id,
-                  x: getXPosition(node.year),
-                  y: node.y || 0,
-                  year: node.year,
-                })
-              )}
+              nodes={minimapNodes}
               containerWidth={containerWidth}
               parentContainerWidth={containerDimensions.width} // Pass the viewer's width
               totalHeight={totalHeight}

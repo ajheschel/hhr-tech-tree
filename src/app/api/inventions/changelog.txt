@@ -1,5 +1,12 @@
+13 August 2026
+- v1.1.5: Performance improvements
+- Added tech: Bamboo
+- Added connection: Salt mining --> Borehole drilling
+- Added connection: Borehole drilling --> Drilled oil well
+
 12 August 2026
 - Added tech: Hollander beater
+- Added tech: Cupellation
 - Added connection: Wheel --> Flywheel
 - Added connection: Spindle --> Flywheel
 - Added connection: Flywheel --> Watt steam engine
@@ -19,6 +26,9 @@
 - Added connection: Trip hammer --> Stamp mill
 - Added connection: Paper mill --> Hollander beater
 - Added connection: Post windmill --> Hollander beater
+- Added connection: Silver --> Cupellation
+- Added connection: Lead --> Cupellation
+- Added connection: Copper smelting --> Cupellation
 
 11 August 2026
 - v1.1.4: Later independent inventions table
@@ -2260,7 +2270,7 @@
 - Added tech: Dispersive prism and color spectrum
 - Added connection: Petroleum naphtha --> Ferrocerium lighter
 - Added connection: Fractional distillation --> Petroleum naphtha
-- Added connection: Modern oil well --> Petroleum naphtha
+- Added connection: Drilled oil well --> Petroleum naphtha
 - Added connection: Petroleum as fuel --> Petroleum naphtha
 - Added connection: Dispersive prism and color spectrum --> Spectroscope
 
@@ -2460,7 +2470,7 @@
 - Added connection: Vulcanized rubber --> Napalm
 - Added connection: Gasoline as fuel --> Napalm
 - Added connection: Napalm --> Fracking
-- Added connection: Modern oil well --> Fracking
+- Added connection: Drilled oil well --> Fracking
 
 13 September 2025
 - Added tech: Herbicide-resistant GMO
@@ -2777,7 +2787,7 @@
 - Added connection: Radial engine --> Turbocharger
 - Added connection: Weaving and basketry --> Cotton (New World)
 - Added connection: Weaving and basketry --> Cotton (Old World)
-- Added connection: Modern oil well --> Firefighting foam
+- Added connection: Drilled oil well --> Firefighting foam
 - Added connection: Firefighting foam --> Foam extinguisher
 - Added connection: Sodium bicarbonate --> Firefighting foam
 - Added connection: Cupronickel --> Nickel silver
