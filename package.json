@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "NODE_OPTIONS='--no-deprecation' next dev --turbopack -H 0.0.0.0",
     "build": "npx tsx src/scripts/fetch-and-save-inventions.ts && NODE_OPTIONS='--no-deprecation' next build",
+    "export:poster-pdfs": "tsx src/scripts/export-poster-panels.ts",
     "start": "NODE_OPTIONS='--no-deprecation' next start",
     "lint": "NODE_OPTIONS='--no-deprecation' next lint"
   },
@@ -16,10 +17,10 @@
     "esbuild-wasm": "^0.25.4",
     "lodash": "^4.17.21",
     "lucide-react": "^0.456.0",
-    "next": "15.0.5",
+    "next": "^16.3.0",
     "react": "19.0.0-rc-66855b96-20241106",
     "react-dom": "19.0.0-rc-66855b96-20241106",
-    "sharp": "^0.34.1",
+    "sharp": "^0.35.3",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7",
     "tsx": "^4.19.4"
@@ -35,6 +36,7 @@
     "eslint": "^9.22.0",
     "eslint-config-next": "15.0.3",
     "postcss": "^8",
+    "playwright": "^1.55.0",
     "tailwindcss": "^3.4.1",
     "tr46": "^5.0.0",
     "typescript": "^5"

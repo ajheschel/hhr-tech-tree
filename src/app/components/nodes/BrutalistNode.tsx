@@ -23,6 +23,9 @@ interface BrutalistNodeProps {
   width: number;
   style?: React.CSSProperties;
   showImages?: boolean;
+  compactPrintLayout?: boolean;
+  compactHeight?: number;
+  hideDate?: boolean;
 }
 
 const formatTitle = (title: string) => {
@@ -74,6 +77,9 @@ const BrutalistNode: React.FC<BrutalistNodeProps> = ({
   width,
   style,
   showImages = true,
+  compactPrintLayout = false,
+  compactHeight = 140,
+  hideDate = false,
 }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
@@ -235,6 +241,108 @@ const BrutalistNode: React.FC<BrutalistNodeProps> = ({
   const imageSizes = `${Math.round(width)}px`;
   const isLocalImage = imageUrl?.startsWith("/") ?? false;
 
+  if (compactPrintLayout) {
+    return (
+      <div
+        ref={nodeRef}
+        className="relative tech-node"
+        lang="en"
+        style={{
+          ...style,
+          width: `${width}px`,
+          height: `${compactHeight}px`,
+          transform: `translate(-${width / 2}px, -${compactHeight / 2}px)`,
+          opacity: style?.opacity,
+        }}
+      >
+        <div className="relative flex h-full flex-col overflow-hidden border border-black bg-white">
+          <div className="relative h-[60px] flex-none border-b border-black">
+            {specialImage ? (
+              <Image
+                src={specialImage}
+                alt={node.title}
+                fill
+                sizes={imageSizes}
+                unoptimized
+                className="object-cover"
+                style={{
+                  filter: "grayscale(20%) contrast(110%)",
+                  mixBlendMode: "multiply",
+                  objectPosition: node.imagePosition || "center",
+                }}
+              />
+            ) : imageUrl ? (
+              <Image
+                src={imageUrl}
+                alt={node.title}
+                fill
+                sizes={imageSizes}
+                className="object-cover"
+                onError={handleImageError}
+                onLoad={handleImageLoad}
+                style={{
+                  filter: "grayscale(20%) contrast(110%)",
+                  mixBlendMode: "multiply",
+                  objectPosition: node.imagePosition || "center",
+                }}
+                unoptimized={isLocalImage}
+              />
+            ) : (
+              <Image
+                src="/placeholder-invention.jpg"
+                alt="Placeholder"
+                fill
+                sizes={imageSizes}
+                unoptimized
+                className="object-cover"
+                style={{
+                  filter: "grayscale(20%) contrast(110%)",
+                  mixBlendMode: "multiply",
+                }}
+              />
+            )}
+          </div>
+
+          <div
+            className="flex min-h-0 flex-1 flex-col px-[6px]"
+            style={{
+              paddingBottom: hideDate ? "8px" : "10px",
+              paddingTop: hideDate ? "4px" : "5px",
+            }}
+          >
+            <h3
+              className="overflow-hidden font-bold"
+              style={{
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 3,
+                fontSize: "16px",
+                lineHeight: 0.95,
+                overflowWrap: "break-word",
+              }}
+            >
+              {formatTitle(formattedTitle)}
+            </h3>
+            {!hideDate && (
+              <div
+                className="mt-auto font-mono"
+                style={{ fontSize: "13px", lineHeight: 1 }}
+              >
+                {yearDisplay}
+              </div>
+            )}
+          </div>
+
+          <div
+            aria-label={node.fields[0]}
+            className="absolute inset-x-0 bottom-0 h-2"
+            style={{ backgroundColor: getFieldColor(node.fields[0]) }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={nodeRef}
@@ -365,9 +473,11 @@ const BrutalistNode: React.FC<BrutalistNodeProps> = ({
           </div>
 
           {/* Year */}
-          <div className="inline-block border border-black px-2 py-0.5 mb-2">
-            <span className="font-mono text-xs">{yearDisplay}</span>
-          </div>
+          {!hideDate && (
+            <div className="inline-block border border-black px-2 py-0.5 mb-2">
+              <span className="font-mono text-xs">{yearDisplay}</span>
+            </div>
+          )}
 
           {/* Fields */}
           <div className="flex flex-wrap gap-1">
@@ -400,6 +510,9 @@ export default React.memo(BrutalistNode, (prevProps, nextProps) => {
     prevProps.node.imagePosition === nextProps.node.imagePosition &&
     prevProps.width === nextProps.width &&
     prevProps.style?.opacity === nextProps.style?.opacity &&
-    prevProps.showImages === nextProps.showImages
+    prevProps.showImages === nextProps.showImages &&
+    prevProps.compactPrintLayout === nextProps.compactPrintLayout &&
+    prevProps.compactHeight === nextProps.compactHeight &&
+    prevProps.hideDate === nextProps.hideDate
   );
 });

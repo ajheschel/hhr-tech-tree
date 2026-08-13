@@ -1,5 +1,13 @@
 Visit [historicaltechtree.com](https://www.historicaltechtree.com/) to see the tech tree. 
 
+## Classroom / Poster Printing Fork
+
+The `poster-print` branch adds 11×17 portrait classroom printing, 36-inch
+large-format printing, compact print cards, card-aware panel boundaries, bulk
+PDF export, and a date-free student activity version. See
+[POSTER_PRINTING.md](POSTER_PRINTING.md) for setup, URLs, export commands, and
+classroom workflows.
+
 ## License
 
 **Code**: This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

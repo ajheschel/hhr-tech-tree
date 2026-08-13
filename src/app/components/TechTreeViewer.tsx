@@ -83,6 +83,13 @@ const INTERVAL_EARLY_PALEOLITHIC = 100000;
 
 // Core layout constants
 const NODE_WIDTH = 160;
+const COMPACT_NODE_WIDTH = 140;
+const COMPACT_NODE_HEIGHT = 140;
+const DATELESS_COMPACT_NODE_HEIGHT = 120;
+const COMPACT_VERTICAL_SPACING = 10;
+const COMPACT_FIELD_BAND_SCALE = 0.35;
+const PRINT_PANEL_CARD_GUTTER = 2;
+const PRINT_PANEL_POSITION_EPSILON = 0.001;
 const VERTICAL_SPACING = 50;
 const YEAR_WIDTH = 240;
 const PADDING = 120;
@@ -227,6 +234,16 @@ function seededRandom(str: string) {
 export function TechTreeViewer() {
   // Get search params
   const searchParams = useSearchParams();
+  const posterMode = searchParams.get("poster") === "1";
+  const hideDates = posterMode && searchParams.get("dates") === "0";
+  const requestedPrintFormat = searchParams.get("format");
+  const printFormat = posterMode && (requestedPrintFormat === "11x17" || requestedPrintFormat === "36")
+    ? requestedPrintFormat
+    : null;
+  const compactPrintLayout = posterMode && printFormat === "11x17";
+  const compactNodeHeight = compactPrintLayout && hideDates
+    ? DATELESS_COMPACT_NODE_HEIGHT
+    : COMPACT_NODE_HEIGHT;
   const router = useRouter();
 
   // Client-side initialization
@@ -357,6 +374,7 @@ export function TechTreeViewer() {
   const [isIPad, setIsIPad] = useState(false);
   // Add state for connection visibility mode
   const [showAllConnections, setShowAllConnections] = useState(false);
+  const viewerRootRef = useRef<HTMLDivElement>(null);
   const horizontalScrollContainerRef = useRef<HTMLDivElement>(null);
   const treeShellRef = useRef<HTMLDivElement>(null);
   const scrollBoundsRef = useRef<HTMLDivElement>(null);
@@ -384,8 +402,12 @@ export function TechTreeViewer() {
   const settingsControlsRef = useRef<HTMLDivElement>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const clearSelectedNodeUrl = useCallback(() => {
-    router.replace('/', { scroll: false });
-  }, [router]);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('node');
+    params.delete('initialNodeId');
+    const query = params.toString();
+    router.replace(query ? `/?${query}` : '/', { scroll: false });
+  }, [router, searchParams]);
 
   // Add effect to save display options to localStorage when they change
   useEffect(() => {
@@ -511,7 +533,11 @@ export function TechTreeViewer() {
   );
 
   const calculateNodePositions = useCallback(
-    (nodes: TechNode[]): TechNode[] => {
+    (
+      nodes: TechNode[],
+      useCompactPrintLayout = false,
+      compactPrintNodeHeight = COMPACT_NODE_HEIGHT
+    ): TechNode[] => {
       if (!nodes.length) return [];
 
       function estimateNodeHeight(node: TechNode): number {
@@ -604,7 +630,12 @@ export function TechTreeViewer() {
 
       yearGroups.forEach((nodesInYear, year) => {
         const x = calculateXPosition(year, minYear, PADDING, YEAR_WIDTH);
-        const MIN_VERTICAL_GAP = VERTICAL_SPACING;
+        const nodeVerticalGap = useCompactPrintLayout
+          ? COMPACT_VERTICAL_SPACING
+          : VERTICAL_SPACING;
+        const fieldBandScale = useCompactPrintLayout
+          ? COMPACT_FIELD_BAND_SCALE
+          : 1;
 
         // Sort nodes by their primary field's band (lowest band = top)
         nodesInYear.sort((a: TechNode, b: TechNode) => {
@@ -623,21 +654,23 @@ export function TechTreeViewer() {
         const nodeHeights: number[] = [];
         // First, stack deterministically
         nodesInYear.forEach((node: TechNode, idx: number) => {
-          const nodeHeight = estimateNodeHeight(node);
+          const nodeHeight = useCompactPrintLayout
+            ? compactPrintNodeHeight
+            : estimateNodeHeight(node);
           let basePosition;
           if (node.title.toLowerCase() === "stone tool") {
             basePosition = INFO_BOX_HEIGHT;
           } else {
             basePosition = Math.max(
               ABSOLUTE_MIN_Y,
-              (node.fields?.[0] ? VERTICAL_BANDS[node.fields[0]] || 1200 : 1200)
+              (node.fields?.[0] ? VERTICAL_BANDS[node.fields[0]] || 1200 : 1200) * fieldBandScale
             );
           }
           let y;
           if (currentY === null) {
             y = basePosition;
           } else {
-            y = Math.max(currentY + MIN_VERTICAL_GAP, basePosition);
+            y = Math.max(currentY + nodeVerticalGap, basePosition);
           }
           nodeYs.push(y);
           nodeHeights.push(nodeHeight);
@@ -648,21 +681,21 @@ export function TechTreeViewer() {
           let y = nodeYs[idx];
           const nodeHeight = nodeHeights[idx];
           // Use a larger jitter for more visible effect
-          const desiredJitter = 20;
+          const desiredJitter = useCompactPrintLayout ? 0 : 20;
           const rand = seededRandom(node.id);
           let jitter = -desiredJitter + rand * (2 * desiredJitter);
           // Clamp jitter so it doesn't cause overlap
           if (idx > 0) {
             const prevY = nodeYs[idx - 1];
             const prevHeight = nodeHeights[idx - 1];
-            const minY = prevY + prevHeight + MIN_VERTICAL_GAP;
+            const minY = prevY + prevHeight + nodeVerticalGap;
             if (y + jitter < minY) {
               jitter = minY - y;
             }
           }
           if (idx < nodesInYear.length - 1) {
             const nextY = nodeYs[idx + 1];
-            const maxY = nextY - MIN_VERTICAL_GAP - nodeHeight;
+            const maxY = nextY - nodeVerticalGap - nodeHeight;
             if (y + jitter > maxY) {
               jitter = maxY - y;
             }
@@ -678,7 +711,11 @@ export function TechTreeViewer() {
 
       const maxY = Math.max(
         ...positionedNodes.map(
-          (node) => (node.y ?? 0) + estimateNodeHeight(node)
+          (node) =>
+            (node.y ?? 0) +
+            (useCompactPrintLayout
+              ? compactPrintNodeHeight / 2
+              : estimateNodeHeight(node))
         )
       );
       setTotalHeight(maxY + 100); // With buffer of 100 px for tooltips
@@ -696,9 +733,9 @@ export function TechTreeViewer() {
       });
     }
     if (searchParams.get('node') || searchParams.get('initialNodeId')) {
-      router.replace('/', { scroll: false });
+      clearSelectedNodeUrl();
     }
-  }, [searchParams, router]);
+  }, [clearSelectedNodeUrl, searchParams]);
 
   // EFFECTS
 
@@ -726,7 +763,11 @@ export function TechTreeViewer() {
             image: showImages ? validateImageUrl(node.image) : undefined
           })) || [];
 
-          const positionedDetailNodes = calculateNodePositions(validatedDetailNodes);
+          const positionedDetailNodes = calculateNodePositions(
+            validatedDetailNodes,
+            compactPrintLayout,
+            compactNodeHeight
+          );
 
           setData({ 
             nodes: positionedDetailNodes, 
@@ -766,7 +807,11 @@ export function TechTreeViewer() {
             image: showImages ? validateImageUrl(node.image) : undefined
           })) || [];
           
-          const positionedDetailNodes = calculateNodePositions(validatedNodes);
+          const positionedDetailNodes = calculateNodePositions(
+            validatedNodes,
+            compactPrintLayout,
+            compactNodeHeight
+          );
           
           setData({ 
             nodes: positionedDetailNodes, 
@@ -799,7 +844,11 @@ export function TechTreeViewer() {
           image: showImages ? validateImageUrl(node.image) : undefined
         })) || [];
 
-        const positionedDetailNodes = calculateNodePositions(validatedDetailNodes);
+        const positionedDetailNodes = calculateNodePositions(
+          validatedDetailNodes,
+          compactPrintLayout,
+          compactNodeHeight
+        );
 
         setData({ 
           nodes: positionedDetailNodes, 
@@ -853,7 +902,7 @@ export function TechTreeViewer() {
       isMounted = false;
       controller.abort();
     };
-  }, []); // Changed from [calculateNodePositions]
+  }, [compactNodeHeight, compactPrintLayout]);
 
   // Make sure containerDimensions are initialized with window size
   useEffect(() => {
@@ -877,6 +926,8 @@ export function TechTreeViewer() {
 
   // Initialize viewport properly on first load and component mount
   useEffect(() => {
+    if (posterMode) return;
+
     const { documentElement, body } = document;
     const previousHtmlOverflow = documentElement.style.overflow;
     const previousBodyOverflow = body.style.overflow;
@@ -898,7 +949,34 @@ export function TechTreeViewer() {
       body.style.overscrollBehavior = previousBodyOverscroll;
       window.history.scrollRestoration = previousScrollRestoration;
     };
-  }, []);
+  }, [posterMode]);
+
+  useEffect(() => {
+    if (!posterMode || !isClient) return;
+
+    const { documentElement, body } = document;
+    const pageRoot = viewerRootRef.current?.closest('main');
+    const previousHtmlOverflow = documentElement.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    const previousPageRootHeight = pageRoot?.style.height;
+    const previousPageRootOverflow = pageRoot?.style.overflow;
+
+    documentElement.style.overflow = 'auto';
+    body.style.overflow = 'visible';
+    if (pageRoot) {
+      pageRoot.style.height = 'auto';
+      pageRoot.style.overflow = 'visible';
+    }
+
+    return () => {
+      documentElement.style.overflow = previousHtmlOverflow;
+      body.style.overflow = previousBodyOverflow;
+      if (pageRoot) {
+        pageRoot.style.height = previousPageRootHeight ?? '';
+        pageRoot.style.overflow = previousPageRootOverflow ?? '';
+      }
+    };
+  }, [isClient, posterMode]);
 
   useEffect(() => {
     if (containerDimensions.width > 0 && containerDimensions.height > 0) {
@@ -1023,7 +1101,10 @@ export function TechTreeViewer() {
       setHighlightedDescendants(new Set());
 
       // Update URL with selected node for deep linking
-      router.replace(`/?node=${node.id}`, { scroll: false });
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('node', node.id);
+      params.delete('initialNodeId');
+      router.replace(`/?${params.toString()}`, { scroll: false });
 
       // If mobile, explicitly set hover state to show tooltip immediately
       if (isMobile) {
@@ -1050,7 +1131,7 @@ export function TechTreeViewer() {
       performanceMarks.end('nodeClick');
       performanceMarks.log('nodeClick');
     },
-    [clearSelectedNodeUrl, data.nodes, selectedNodeId, getXPosition, containerDimensions.height, isMobile, router]
+    [clearSelectedNodeUrl, data.nodes, selectedNodeId, getXPosition, containerDimensions.height, isMobile, router, searchParams]
   );
 
   const handleJumpToNearest = useCallback(() => {
@@ -1181,7 +1262,7 @@ export function TechTreeViewer() {
   const { zoomLevel: treeZoomLevel, isPinching, zoomRef, setZoomAtPoint } = usePinchZoom(
     horizontalScrollContainerRef,
     {
-      enabled: isTouchDevice,
+      enabled: isTouchDevice && !posterMode,
       minZoom: MIN_TREE_ZOOM,
       maxZoom: MAX_TREE_ZOOM,
       contentWidth: containerWidth,
@@ -1197,6 +1278,207 @@ export function TechTreeViewer() {
     }
   );
   zoomLevelRef.current = treeZoomLevel;
+  const effectiveZoomLevel = posterMode ? 1 : treeZoomLevel;
+
+  const posterLogicalWidth = containerWidth;
+  const posterLogicalHeight = TIMELINE_HEIGHT + totalHeight;
+  const printPanelConfig = useMemo(
+    () => printFormat === "11x17"
+      ? {
+          label: "11×17 Portrait",
+          pageWidthInches: 11,
+          pageHeightInches: 17,
+          viewportWidthInches: 10.5,
+          viewportHeightInches: 16.5,
+          marginInches: 0.25,
+          overlapInches: 0.25,
+        }
+      : printFormat === "36"
+        ? {
+            label: "36-inch",
+            pageWidthInches: 96,
+            pageHeightInches: 36,
+            viewportWidthInches: 96,
+            viewportHeightInches: 36,
+            marginInches: 0,
+            overlapInches: 0.5,
+          }
+        : null,
+    [printFormat]
+  );
+  const logicalPixelsPerInch = printPanelConfig
+    ? posterLogicalHeight / printPanelConfig.viewportHeightInches
+    : 0;
+  const panelLogicalWidth = printPanelConfig
+    ? printPanelConfig.viewportWidthInches * logicalPixelsPerInch
+    : posterLogicalWidth;
+  const overlapLogicalWidth = printPanelConfig
+    ? printPanelConfig.overlapInches * logicalPixelsPerInch
+    : 0;
+  const panelAdvance = panelLogicalWidth - overlapLogicalWidth;
+  const safePanelStarts = useMemo(() => {
+    if (!printPanelConfig || !data.nodes.length || panelLogicalWidth <= 0) {
+      return [0];
+    }
+
+    const nodeWidth = compactPrintLayout ? COMPACT_NODE_WIDTH : NODE_WIDTH;
+    const halfProtectedWidth = nodeWidth / 2 + PRINT_PANEL_CARD_GUTTER;
+    const occupiedIntervals = Array.from(
+      new Set(data.nodes.map((node) => getXPosition(node.year)))
+    )
+      .sort((a, b) => a - b)
+      .map((x) => [x - halfProtectedWidth, x + halfProtectedWidth] as const);
+
+    const mergedOccupiedIntervals: Array<[number, number]> = [];
+    occupiedIntervals.forEach(([start, end]) => {
+      const previous = mergedOccupiedIntervals[mergedOccupiedIntervals.length - 1];
+      if (previous && start <= previous[1]) {
+        previous[1] = Math.max(previous[1], end);
+      } else {
+        mergedOccupiedIntervals.push([start, end]);
+      }
+    });
+
+    const rangeStart = -panelLogicalWidth;
+    const rangeEnd = posterLogicalWidth + panelLogicalWidth;
+    const safeBoundaryIntervals: Array<[number, number]> = [];
+    let cursor = rangeStart;
+    mergedOccupiedIntervals.forEach(([start, end]) => {
+      if (start > cursor) {
+        safeBoundaryIntervals.push([cursor, start]);
+      }
+      cursor = Math.max(cursor, end);
+    });
+    if (cursor < rangeEnd) {
+      safeBoundaryIntervals.push([cursor, rangeEnd]);
+    }
+
+    const safeEndAsStartIntervals = safeBoundaryIntervals.map(
+      ([start, end]) =>
+        [start - panelLogicalWidth, end - panelLogicalWidth] as [number, number]
+    );
+    const validStartIntervals: Array<[number, number]> = [];
+    let leftIndex = 0;
+    let rightIndex = 0;
+    while (
+      leftIndex < safeBoundaryIntervals.length &&
+      rightIndex < safeEndAsStartIntervals.length
+    ) {
+      const start = Math.max(
+        safeBoundaryIntervals[leftIndex][0],
+        safeEndAsStartIntervals[rightIndex][0]
+      );
+      const end = Math.min(
+        safeBoundaryIntervals[leftIndex][1],
+        safeEndAsStartIntervals[rightIndex][1]
+      );
+      if (start <= end) {
+        validStartIntervals.push([start, end]);
+      }
+      if (
+        safeBoundaryIntervals[leftIndex][1] <
+        safeEndAsStartIntervals[rightIndex][1]
+      ) {
+        leftIndex += 1;
+      } else {
+        rightIndex += 1;
+      }
+    }
+
+    const findLargestValidStart = (minimum: number, maximum: number) => {
+      let result: number | null = null;
+      validStartIntervals.forEach(([start, end]) => {
+        const candidateStart = Math.max(start, minimum);
+        const candidateEnd = Math.min(end, maximum);
+        if (candidateStart <= candidateEnd) {
+          result = Math.max(result ?? Number.NEGATIVE_INFINITY, candidateEnd);
+        }
+      });
+      return result;
+    };
+    const findSmallestValidStart = (minimum: number, maximum: number) => {
+      let result: number | null = null;
+      validStartIntervals.forEach(([start, end]) => {
+        const candidateStart = Math.max(start, minimum);
+        const candidateEnd = Math.min(end, maximum);
+        if (candidateStart <= candidateEnd) {
+          result = Math.min(result ?? Number.POSITIVE_INFINITY, candidateStart);
+        }
+      });
+      return result;
+    };
+
+    const firstStart = findLargestValidStart(-panelLogicalWidth, 0) ?? 0;
+    const starts = [firstStart];
+    let currentStart = firstStart;
+    while (
+      currentStart + panelLogicalWidth < posterLogicalWidth &&
+      starts.length <= data.nodes.length
+    ) {
+      const latestStartWithRequiredOverlap =
+        currentStart + panelAdvance;
+      const nextStart = findLargestValidStart(
+        currentStart + PRINT_PANEL_POSITION_EPSILON,
+        latestStartWithRequiredOverlap
+      );
+      if (nextStart === null || nextStart <= currentStart) break;
+      starts.push(nextStart);
+      currentStart = nextStart;
+    }
+
+    if (starts.length > 1) {
+      const previousStart = starts[starts.length - 2];
+      const earliestFinalStart = Math.max(
+        previousStart + PRINT_PANEL_POSITION_EPSILON,
+        posterLogicalWidth - panelLogicalWidth
+      );
+      const latestFinalStart =
+        previousStart + panelAdvance;
+      const alignedFinalStart = findSmallestValidStart(
+        earliestFinalStart,
+        latestFinalStart
+      );
+      if (alignedFinalStart !== null) {
+        starts[starts.length - 1] = alignedFinalStart;
+      }
+    }
+
+    return starts;
+  }, [
+    compactPrintLayout,
+    data.nodes,
+    getXPosition,
+    panelAdvance,
+    panelLogicalWidth,
+    posterLogicalWidth,
+    printPanelConfig,
+  ]);
+  const panelCount = safePanelStarts.length;
+  const requestedPanel = Number.parseInt(searchParams.get("panel") ?? "1", 10);
+  const panelNumber = Math.min(
+    panelCount,
+    Math.max(1, Number.isFinite(requestedPanel) ? requestedPanel : 1)
+  );
+  const panelStartX = printPanelConfig
+    ? safePanelStarts[panelNumber - 1] ?? 0
+    : 0;
+  const printScale = printPanelConfig
+    ? (printPanelConfig.viewportHeightInches * 96) / posterLogicalHeight
+    : 1;
+  const printPanelMode = printPanelConfig !== null;
+
+  useEffect(() => {
+    if (!printPanelMode || !printFormat || isLoading || data.nodes.length === 0) return;
+
+    const panelParam = searchParams.get("panel");
+    if (panelParam === String(panelNumber)) return;
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("poster", "1");
+    params.set("format", printFormat);
+    params.set("panel", String(panelNumber));
+    router.replace(`/?${params.toString()}`, { scroll: false });
+  }, [data.nodes.length, isLoading, panelNumber, printFormat, printPanelMode, router, searchParams]);
 
   const getViewportAnchor = useCallback(() => {
     const container = horizontalScrollContainerRef.current;
@@ -1252,8 +1534,8 @@ export function TechTreeViewer() {
     treeShellRef.current?.style.setProperty("--tree-zoom", String(liveZoom));
   });
 
-  const zoomedTreeWidth = containerWidth * treeZoomLevel;
-  const zoomedTreeHeight = totalHeight * treeZoomLevel;
+  const zoomedTreeWidth = containerWidth * effectiveZoomLevel;
+  const zoomedTreeHeight = totalHeight * effectiveZoomLevel;
   const scrollShellHeight = Math.max(
     containerDimensions.height,
     TIMELINE_HEIGHT + zoomedTreeHeight
@@ -2167,81 +2449,17 @@ export function TechTreeViewer() {
   // Simplified isNodeInViewport function
   const isNodeInViewport = useCallback(
     (node: TechNode) => {
-      // Nodes without position data can't be in viewport
-      if (node.x === undefined || node.y === undefined) {
-        return false;
-      }
-
-      // Use a reasonable buffer for better user experience
-      const buffer = Math.min(
-        Math.min(window.innerWidth / 3, 350) / treeZoomLevel,
-        MAX_NODE_VIEWPORT_BUFFER
-      );
-      const bufferedViewport = {
-        left: deferredViewportState.left - buffer,
-        right: deferredViewportState.right + buffer,
-        top: deferredViewportState.top - buffer,
-        bottom: deferredViewportState.bottom + buffer,
-      };
-
-      // Simple bounds check
-      const isVisible = (
-        node.x >= bufferedViewport.left &&
-        node.x <= bufferedViewport.right &&
-        node.y >= bufferedViewport.top &&
-        node.y <= bufferedViewport.bottom
-      );
-      
-      return isVisible;
+      return node.x !== undefined && node.y !== undefined;
     },
-    [deferredViewportState, scrollPosition, treeZoomLevel]
+    []
   );
 
   // Add strict visibility check with minimal buffer
   const isNodeStrictlyInViewport = useCallback(
     (node: TechNode) => {
-      // Nodes without position data can't be in viewport
-      if (node.x === undefined || node.y === undefined) {
-        return false;
-      }
-
-      // Use a small buffer for better user experience
-      const buffer = Math.min(
-        10 / treeZoomLevel,
-        MAX_STRICT_VIEWPORT_BUFFER
-      ); // Much smaller buffer than the display buffer
-      const strictViewport = {
-        left: deferredViewportState.left - buffer,
-        right: deferredViewportState.right + buffer,
-        top: deferredViewportState.top - buffer,
-        bottom: deferredViewportState.bottom + buffer,
-      };
-
-      // Calculate node bounds (using NODE_WIDTH and estimated height)
-      const nodeLeft = node.x - NODE_WIDTH / 2;
-      const nodeRight = node.x + NODE_WIDTH / 2;
-      const nodeTop = node.y;
-      const nodeBottom = node.y + 200; // Approximate node height
-
-      // Calculate intersection area
-      const intersectionLeft = Math.max(nodeLeft, strictViewport.left);
-      const intersectionRight = Math.min(nodeRight, strictViewport.right);
-      const intersectionTop = Math.max(nodeTop, strictViewport.top);
-      const intersectionBottom = Math.min(nodeBottom, strictViewport.bottom);
-
-      // If there's no intersection, node is not visible
-      if (intersectionLeft >= intersectionRight || intersectionTop >= intersectionBottom) {
-        return false;
-      }
-
-      // Calculate intersection area
-      const intersectionArea = (intersectionRight - intersectionLeft) * (intersectionBottom - intersectionTop);
-      const nodeArea = NODE_WIDTH * 200; // Approximate node area
-
-      // Node is considered visible if at least 30% of its area is in viewport
-      return intersectionArea / nodeArea > 0.3;
+      return node.x !== undefined && node.y !== undefined;
     },
-    [deferredViewportState, treeZoomLevel]
+    []
   );
 
   // Add memoized strictly visible nodes
@@ -2251,89 +2469,18 @@ export function TechTreeViewer() {
 
   // Simplified isConnectionInViewport function
   const isConnectionInViewport = useCallback(
-    (link: TechTreeLink, index: number) => {
-      // Get the source and target nodes
+    (link: TechTreeLink) => {
       const sourceNode = nodeById.get(link.source);
       const targetNode = nodeById.get(link.target);
-      
-      // If we can't find either node with valid positions, connection can't be in viewport
-      if (
-        sourceNode?.x === undefined ||
-        sourceNode?.y === undefined ||
-        targetNode?.x === undefined ||
-        targetNode?.y === undefined
-      ) {
-        return false;
-      }
 
-      // Use a larger buffer specifically for connections to prevent them from disappearing during scrolling
-      const buffer = Math.min(
-        Math.min(window.innerWidth / 2, 500) / treeZoomLevel,
-        MAX_CONNECTION_VIEWPORT_BUFFER
+      return (
+        sourceNode?.x !== undefined &&
+        sourceNode?.y !== undefined &&
+        targetNode?.x !== undefined &&
+        targetNode?.y !== undefined
       );
-      const bufferedViewport = {
-        left: deferredViewportState.left - buffer,
-        right: deferredViewportState.right + buffer,
-        top: deferredViewportState.top - buffer,
-        bottom: deferredViewportState.bottom + buffer,
-      };
-
-      // Connection is visible if either end is in viewport
-      const isSourceInViewport = 
-        sourceNode.x >= bufferedViewport.left &&
-        sourceNode.x <= bufferedViewport.right &&
-        sourceNode.y >= bufferedViewport.top &&
-        sourceNode.y <= bufferedViewport.bottom;
-      
-      const isTargetInViewport = 
-        targetNode.x >= bufferedViewport.left &&
-        targetNode.x <= bufferedViewport.right &&
-        targetNode.y >= bufferedViewport.top &&
-        targetNode.y <= bufferedViewport.bottom;
-      
-      // Also check if connection crosses viewport even if endpoints are outside
-      if (!isSourceInViewport && !isTargetInViewport) {
-        // Calculate control points for the bezier curve (simplified approximation)
-        const isSameYear = Math.abs(sourceNode.x - targetNode.x) < 160;
-        const controlPointOffset = Math.min(Math.abs(sourceNode.x - targetNode.x) * 0.5, 200);
-        
-        let cx1, cy1, cx2, cy2;
-        
-        if (isSameYear) {
-          // For same-year connections (s-curve)
-          const horizontalOffset = 200;
-          cx1 = sourceNode.x + horizontalOffset;
-          cy1 = sourceNode.y - Math.sign(sourceNode.y - targetNode.y) * 50;
-          cx2 = targetNode.x - horizontalOffset;
-          cy2 = targetNode.y - Math.sign(targetNode.y - sourceNode.y) * 50;
-        } else {
-          // For regular connections
-          cx1 = sourceNode.x + controlPointOffset;
-          cy1 = sourceNode.y;
-          cx2 = targetNode.x - controlPointOffset;
-          cy2 = targetNode.y;
-        }
-        
-        // Check if bounding box of the curve intersects the viewport
-        const curveBoundingBox = {
-          left: Math.min(sourceNode.x, targetNode.x, cx1, cx2),
-          right: Math.max(sourceNode.x, targetNode.x, cx1, cx2),
-          top: Math.min(sourceNode.y, targetNode.y, cy1, cy2),
-          bottom: Math.max(sourceNode.y, targetNode.y, cy1, cy2),
-        };
-        
-        // Return true if the bounding box of the curve intersects the viewport
-        return !(
-          curveBoundingBox.right < bufferedViewport.left ||
-          curveBoundingBox.left > bufferedViewport.right ||
-          curveBoundingBox.bottom < bufferedViewport.top ||
-          curveBoundingBox.top > bufferedViewport.bottom
-        );
-      }
-      
-      return isSourceInViewport || isTargetInViewport;
     },
-    [deferredViewportState, nodeById, treeZoomLevel]
+    [nodeById]
   );
 
   // Add debounced viewport update
@@ -2394,7 +2541,7 @@ export function TechTreeViewer() {
   }, [containerDimensions, updateViewportState]);
 
   useEffect(() => {
-    if (isTouchDevice) return;
+    if (posterMode || isTouchDevice) return;
 
     const container = horizontalScrollContainerRef.current;
     if (!container) return;
@@ -2427,10 +2574,10 @@ export function TechTreeViewer() {
     return () => {
       container.removeEventListener("wheel", handleWheelZoom);
     };
-  }, [isTouchDevice, treeZoomLevel, updateZoom]);
+  }, [isTouchDevice, posterMode, treeZoomLevel, updateZoom]);
 
   useEffect(() => {
-    if (isTouchDevice) return;
+    if (posterMode || isTouchDevice) return;
 
     const handleKeyboardZoom = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -2459,7 +2606,7 @@ export function TechTreeViewer() {
     return () => {
       window.removeEventListener("keydown", handleKeyboardZoom);
     };
-  }, [getViewportAnchor, isTouchDevice, stepZoom, updateZoom]);
+  }, [getViewportAnchor, isTouchDevice, posterMode, stepZoom, updateZoom]);
 
   // Add this memoized function for calculating node opacity
   const getNodeOpacity = useCallback(
@@ -2744,7 +2891,7 @@ export function TechTreeViewer() {
     if (connectionMode === 'all') {
       // Show all connections in viewport
       data.links.forEach((link, index) => {
-        if (isConnectionInViewport(link, index)) {
+        if (isConnectionInViewport(link)) {
           currentFrameDrivenConnectionIndices.add(index);
           nodeVisibleConnections++;
         }
@@ -2782,7 +2929,7 @@ export function TechTreeViewer() {
       previousVisibleConnections.forEach(index => {
           if (!currentFrameDrivenConnectionIndices.has(index)) {
               const link = data.links[index];
-              if (link && isConnectionInViewport(link, index)) {
+              if (link && isConnectionInViewport(link)) {
                   currentFrameDrivenConnectionIndices.add(index);
                   stickyVisibleConnections++;
               }
@@ -2791,7 +2938,7 @@ export function TechTreeViewer() {
 
       // Third pass: Count invisible connections in viewport
       data.links.forEach((link, index) => {
-          if (!currentFrameDrivenConnectionIndices.has(index) && isConnectionInViewport(link, index)) {
+          if (!currentFrameDrivenConnectionIndices.has(index) && isConnectionInViewport(link)) {
               invisibleViewportConnections++;
           }
       });
@@ -2854,6 +3001,13 @@ export function TechTreeViewer() {
     stickyVisibleConnections,
     invisibleViewportConnections
   } = visibleElements;
+
+  const renderedNodes = posterMode
+    ? data.nodes.filter(isNodeInViewport)
+    : visibleNodes;
+  const renderedConnections = posterMode
+    ? data.links.filter(isConnectionInViewport)
+    : visibleConnections;
 
   // Remove the old memos
   // const visibleNodes = useMemo(...)
@@ -3052,7 +3206,7 @@ useEffect(() => {
     // Get the indices of all currently visible connections
     const currentlyVisibleConnectionIndices = new Set(
       data.links
-        .map((link, index) => isConnectionInViewport(link, index) ? index : -1)
+        .map((link, index) => isConnectionInViewport(link) ? index : -1)
         .filter(index => index !== -1)
     );
     
@@ -3198,12 +3352,36 @@ useEffect(() => {
 
   const zoomPercent = Math.round(treeZoomLevel * 100);
   const activeTooltipNodeId = selectedNodeId || hoveredNode?.id;
+  const posterReady =
+    !isLoading &&
+    renderedNodes.length > 0 &&
+    renderedConnections.length > 0;
+  const actualPanelOverlap = panelNumber > 1
+    ? safePanelStarts[panelNumber - 2] + panelLogicalWidth - panelStartX
+    : 0;
+
+  const navigateToPanel = (nextPanel: number) => {
+    if (!printFormat) return;
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("poster", "1");
+    params.set("format", printFormat);
+    params.set("panel", String(Math.min(panelCount, Math.max(1, nextPanel))));
+    router.replace(`/?${params.toString()}`, { scroll: false });
+  };
 
   // 5. Defer non-critical UI elements
-  return (
-    <div className="h-screen bg-yellow-50">
+  const visualization = (
+    <div
+      ref={viewerRootRef}
+      className={posterMode ? "bg-yellow-50" : "h-screen bg-yellow-50"}
+      style={posterMode ? {
+        width: `${containerWidth}px`,
+        height: `${TIMELINE_HEIGHT + totalHeight}px`,
+      } : undefined}
+    >
       {/* Defer loading of controls until after main content */}
-      {!isLoading && (
+      {!posterMode && !isLoading && (
         <div
           className="fixed top-16 right-4 flex flex-col items-end gap-4"
           style={{ zIndex: 1000 }}
@@ -3245,34 +3423,52 @@ useEffect(() => {
 
       <div
         ref={horizontalScrollContainerRef}
-        className="overflow-x-auto overflow-y-auto h-[100dvh] bg-yellow-50"
+        className={posterMode
+          ? "overflow-visible bg-yellow-50"
+          : "overflow-x-auto overflow-y-auto h-[100dvh] bg-yellow-50"
+        }
         style={{ 
-          overscrollBehavior: "none",
-          touchAction: isTouchDevice ? "pan-x pan-y" : "pan-x pan-y pinch-zoom",
+          overscrollBehavior: posterMode ? "auto" : "none",
+          touchAction: posterMode
+            ? "auto"
+            : isTouchDevice
+              ? "pan-x pan-y"
+              : "pan-x pan-y pinch-zoom",
           WebkitOverflowScrolling: "touch",
           WebkitTapHighlightColor: "transparent",
           scrollbarWidth: "thin",   // Show thin scrollbar in Firefox
           scrollbarColor: "#91B4C5 #fefce8", // Thumb and track colors
           position: 'relative',
-          zIndex: 20 // Higher than minimap's z-index of 10
+          zIndex: 20, // Higher than minimap's z-index of 10
+          ...(posterMode ? {
+            width: `${containerWidth}px`,
+            height: `${TIMELINE_HEIGHT + totalHeight}px`,
+            overflow: "visible",
+          } : {}),
         }}
-        onMouseDown={handleMouseDown}
-        onScroll={throttle((e) => {
-          if (isPinchingRef.current) return;
-          const horizontalScroll = e.currentTarget.scrollLeft;
-          const verticalScroll = e.currentTarget.scrollTop;
-          setScrollPosition({
-            left: horizontalScroll,
-            top: verticalScroll,
-          });
-        }, 100)} // Throttle to max once every 100ms
+        onMouseDown={posterMode ? undefined : handleMouseDown}
+        onScroll={posterMode ? undefined : throttle((e) => {
+            if (isPinchingRef.current) return;
+            const horizontalScroll = e.currentTarget.scrollLeft;
+            const verticalScroll = e.currentTarget.scrollTop;
+            setScrollPosition({
+              left: horizontalScroll,
+              top: verticalScroll,
+            });
+          }, 100)} // Throttle to max once every 100ms
       >
         <div
           ref={treeShellRef}
+          data-poster-surface={posterMode ? "true" : undefined}
           style={{
-            ["--tree-zoom" as string]: treeZoomLevel,
-            width: `calc(${containerWidth}px * var(--tree-zoom))`,
-            minHeight: `max(${containerDimensions.height}px, calc(${TIMELINE_HEIGHT}px + ${totalHeight}px * var(--tree-zoom)))`,
+            ["--tree-zoom" as string]: effectiveZoomLevel,
+            width: posterMode
+              ? `${containerWidth}px`
+              : `calc(${containerWidth}px * var(--tree-zoom))`,
+            minHeight: posterMode
+              ? `${TIMELINE_HEIGHT + totalHeight}px`
+              : `max(${containerDimensions.height}px, calc(${TIMELINE_HEIGHT}px + ${totalHeight}px * var(--tree-zoom)))`,
+            height: posterMode ? `${TIMELINE_HEIGHT + totalHeight}px` : undefined,
             position: "relative",
           }}
         >
@@ -3282,8 +3478,8 @@ useEffect(() => {
             style={{
               width: `calc(${containerWidth}px * var(--tree-zoom))`,
               zIndex: 100,
-              position: "sticky",
-              top: 0,
+              position: posterMode ? "relative" : "sticky",
+              top: posterMode ? undefined : 0,
               minHeight: isMobile ? "48px" : undefined,
               maxHeight: isMobile ? "48px" : undefined,
               overflow: isMobile ? "hidden" : undefined,
@@ -3295,7 +3491,7 @@ useEffect(() => {
 
               return (
                 <div className="relative" style={{ width: "100%", height: "100%" }}>
-                  {timelineYears.map((year) => {
+                  {!hideDates && timelineYears.map((year) => {
                     return (
                       <div
                         key={year}
@@ -3305,9 +3501,9 @@ useEffect(() => {
                           transform: "translateX(-50%)",
                           top: isMobile ? "16px" : "16px",
                           fontSize:
-                            treeZoomLevel <= 0.12
+                            effectiveZoomLevel <= 0.12
                               ? "9px"
-                              : treeZoomLevel <= 0.4
+                              : effectiveZoomLevel <= 0.4
                                 ? "11px"
                                 : undefined,
                           textDecorationLine: "none",
@@ -3319,13 +3515,13 @@ useEffect(() => {
                         }}
                       >
                         <span style={{ pointerEvents: "none", display: "inline-block" }}>
-                          {year < 0 && treeZoomLevel <= 0.4 ? (
+                          {year < 0 && effectiveZoomLevel <= 0.4 ? (
                             <>
                               <span style={{ display: "block" }}>{Math.abs(year)}</span>
                               <span
                                 style={{
                                   display: "block",
-                                  fontSize: treeZoomLevel <= 0.12 ? "8px" : "9px",
+                                  fontSize: effectiveZoomLevel <= 0.12 ? "8px" : "9px",
                                   lineHeight: 1,
                                 }}
                               >
@@ -3362,7 +3558,7 @@ useEffect(() => {
             style={{
               width: `${zoomedTreeWidth}px`,
               height: `${zoomedTreeHeight}px`,
-              overflow: "hidden",
+              overflow: posterMode ? "visible" : "hidden",
             }}
           >
             <div
@@ -3370,7 +3566,7 @@ useEffect(() => {
               style={{
                 width: `${containerWidth}px`,
                 minHeight: `${totalHeight}px`,
-                transform: `scale(${treeZoomLevel})`,
+                transform: `scale(${effectiveZoomLevel})`,
                 transformOrigin: "top left",
                 willChange: "transform",
                 backfaceVisibility: "hidden",
@@ -3381,7 +3577,7 @@ useEffect(() => {
                   width: "100%",
                   height: `${totalHeight}px`,
                   position: "relative",
-                  marginBottom: "64px",
+                  marginBottom: posterMode ? 0 : "64px",
                   willChange: "transform",
                   backfaceVisibility: "hidden",
                 }}
@@ -3394,7 +3590,7 @@ useEffect(() => {
                     zIndex: 1,
                   }}
                 >
-                  {visibleConnections.map((link, visibleIndex) => {
+                  {renderedConnections.map((link, visibleIndex) => {
                     const sourceNode = nodeById.get(link.source);
                     const targetNode = nodeById.get(link.target);
 
@@ -3415,6 +3611,7 @@ useEffect(() => {
                         }}
                         sourceIndex={nodeIndexById.get(sourceNode.id) ?? -1}
                         targetIndex={nodeIndexById.get(targetNode.id) ?? -1}
+                        nodeWidth={compactPrintLayout ? COMPACT_NODE_WIDTH : NODE_WIDTH}
                         connectionType={link.type}
                         isHighlighted={shouldHighlightLink(link, visibleIndex)}
                         opacity={getLinkOpacity(link, visibleIndex)}
@@ -3450,7 +3647,7 @@ useEffect(() => {
 
                 {/* Nodes */}
                 <div ref={nodesContainerRef} className="relative" style={{ zIndex: 10 }}>
-                  {visibleNodes.map((node) => {
+                  {renderedNodes.map((node) => {
                     const details = prefetchedNodeDetails.current.get(node.id);
                     const displayNode = { ...node, ...(details || {}) };
                     return (
@@ -3471,7 +3668,10 @@ useEffect(() => {
                             setHoveredNodeId(null);
                           }
                         }}
-                        width={NODE_WIDTH}
+                        width={compactPrintLayout ? COMPACT_NODE_WIDTH : NODE_WIDTH}
+                        compactPrintLayout={compactPrintLayout}
+                        compactHeight={compactNodeHeight}
+                        hideDate={hideDates}
                         style={{
                           position: "absolute",
                           left: `${getXPosition(node.year)}px`,
@@ -3487,7 +3687,7 @@ useEffect(() => {
 
                 {/* Tooltips */}
                 <div className="relative" style={{ zIndex: 100 }}>
-                  {visibleNodes.map((baseLoopNode) => {
+                  {renderedNodes.map((baseLoopNode) => {
                     if (activeTooltipNodeId !== baseLoopNode.id) return null;
 
                     const prefetchedDetails = prefetchedNodeDetails.current.get(baseLoopNode.id);
@@ -4106,7 +4306,7 @@ useEffect(() => {
           </div>
         </div>
         {/* Minimap - Conditionally render based on data? Or leave as is? */}
-        {data.nodes.length > 0 && (
+        {!posterMode && data.nodes.length > 0 && (
           <div 
             className="fixed left-0 right-0 z-10 h-16 bg-yellow-50"
             style={{
@@ -4144,7 +4344,7 @@ useEffect(() => {
         )}
       </div>
       {/* Only render debug overlay in development mode */}
-      {process.env.NODE_ENV === 'development' && showDebugOverlay && (
+      {!posterMode && process.env.NODE_ENV === 'development' && showDebugOverlay && (
         <DebugOverlay
           viewport={visibleViewport}
           scrollPosition={scrollPosition}
@@ -4160,7 +4360,7 @@ useEffect(() => {
         />
       )}
       {/* Jump to Nearest Tech Button - Update the condition */}
-      {!isLoading && strictlyVisibleNodes.length === 0 && data.nodes.length > 0 && (
+      {!posterMode && !isLoading && strictlyVisibleNodes.length === 0 && data.nodes.length > 0 && (
         <button
           ref={jumpButtonRef}
           onClick={handleJumpToNearest}
@@ -4176,7 +4376,7 @@ useEffect(() => {
         </button>
       )}
       {/* Desktop zoom controls */}
-      {!isTouchDevice && !isLoading && (
+      {!posterMode && !isTouchDevice && !isLoading && (
         <div className="fixed bottom-20 right-16 z-30 -translate-y-1 font-mono">
           <div className="flex items-center overflow-hidden border border-[#91B4C5] bg-white/80 backdrop-blur">
             <button
@@ -4207,7 +4407,8 @@ useEffect(() => {
         </div>
       )}
       {/* Settings Button and Menu */}
-      <div ref={settingsControlsRef} className="fixed bottom-20 right-4 z-30">
+      {!posterMode && (
+        <div ref={settingsControlsRef} className="fixed bottom-20 right-4 z-30">
         <button
           type="button"
           className="settings-button p-2 text-[#91B4C5] hover:text-[#6B98AE] transition-colors"
@@ -4365,8 +4566,170 @@ useEffect(() => {
             </div>
           </div>
         )}
-      </div>
+        </div>
+      )}
     </div>
+  );
+
+  if (!printPanelConfig) {
+    return visualization;
+  }
+
+  const pageWidth = `${printPanelConfig.pageWidthInches}in`;
+  const pageHeight = `${printPanelConfig.pageHeightInches}in`;
+  const viewportWidth = `${printPanelConfig.viewportWidthInches}in`;
+  const viewportHeight = `${printPanelConfig.viewportHeightInches}in`;
+
+  return (
+    <>
+      <style>{`
+        @page {
+          size: ${pageWidth} ${pageHeight};
+          margin: 0;
+        }
+
+        @media print {
+          html,
+          body,
+          main {
+            width: ${pageWidth} !important;
+            height: ${pageHeight} !important;
+            min-width: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+            background: white !important;
+            box-shadow: none !important;
+          }
+
+          [data-print-preview-shell="true"],
+          [data-print-page="true"] {
+            width: ${pageWidth} !important;
+            height: ${pageHeight} !important;
+            min-width: 0 !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+            background: white !important;
+            box-shadow: none !important;
+          }
+
+          [data-print-page="true"] {
+            padding: ${printPanelConfig.marginInches}in !important;
+            box-sizing: border-box !important;
+            print-color-adjust: exact !important;
+            -webkit-print-color-adjust: exact !important;
+          }
+
+          [data-print-controls="true"] {
+            display: none !important;
+          }
+        }
+      `}</style>
+
+      <div
+        data-print-preview-shell="true"
+        style={{
+          width: "max-content",
+          minWidth: `calc(${pageWidth} + 64px)`,
+          minHeight: `calc(${pageHeight} + 104px)`,
+          padding: "72px 32px 32px",
+          boxSizing: "border-box",
+          background: "#d4d4d4",
+        }}
+      >
+        <div
+          data-print-controls="true"
+          className="fixed left-1/2 top-4 z-[2000] -translate-x-1/2 border border-black bg-white px-4 py-3 font-mono shadow-md"
+        >
+          <div className="mb-2 text-center text-sm font-bold">
+            {printPanelConfig.label} — Panel {panelNumber} of {panelCount}
+          </div>
+          <div className="flex items-center justify-center gap-2">
+            <button
+              type="button"
+              disabled={panelNumber <= 1}
+              onClick={() => navigateToPanel(panelNumber - 1)}
+              className="border border-black px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={panelNumber >= panelCount}
+              onClick={() => navigateToPanel(panelNumber + 1)}
+              className="border border-black px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="border border-black bg-black px-3 py-1 text-xs text-white"
+            >
+              Print
+            </button>
+          </div>
+        </div>
+
+        <div
+          data-print-page="true"
+          style={{
+            width: pageWidth,
+            height: pageHeight,
+            padding: `${printPanelConfig.marginInches}in`,
+            boxSizing: "border-box",
+            overflow: "hidden",
+            position: "relative",
+            background: "white",
+            boxShadow: "0 4px 24px rgba(0, 0, 0, 0.25)",
+          }}
+        >
+          <div
+            data-print-panel="true"
+            data-print-format={printFormat}
+            data-panel-number={panelNumber}
+            data-panel-count={panelCount}
+            data-panel-start-x={panelStartX}
+            data-panel-end-x={panelStartX + panelLogicalWidth}
+            data-panel-logical-width={panelLogicalWidth}
+            data-panel-overlap={actualPanelOverlap}
+            data-poster-ready={posterReady ? "true" : "false"}
+            style={{
+              width: viewportWidth,
+              height: viewportHeight,
+              overflow: "hidden",
+              position: "relative",
+              background: "#fefce8",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: `${posterLogicalWidth}px`,
+                height: `${posterLogicalHeight}px`,
+                transform: `scale(${printScale})`,
+                transformOrigin: "top left",
+              }}
+            >
+              <div
+                style={{
+                  width: `${posterLogicalWidth}px`,
+                  height: `${posterLogicalHeight}px`,
+                  transform: `translateX(-${panelStartX}px)`,
+                }}
+              >
+                {visualization}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 

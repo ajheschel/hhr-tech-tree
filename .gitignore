@@ -19,9 +19,11 @@
 
 # production
 /build
+/poster-pdfs
 
 # misc
 .DS_Store
+*.backup
 *.pem
 
 # debug
