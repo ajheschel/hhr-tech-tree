@@ -9,7 +9,9 @@ PDF export, and a date-free student activity version. See
 classroom workflows.
 
 The branch also includes a GitHub Codespaces development setup; see the
-[Codespaces instructions](POSTER_PRINTING.md#github-codespaces).
+[Codespaces instructions](POSTER_PRINTING.md#github-codespaces), and a
+conservative automated upstream-sync workflow; see
+[Automatic upstream synchronization](POSTER_PRINTING.md#automatic-upstream-synchronization).
 
 ## License
 

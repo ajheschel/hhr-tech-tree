@@ -355,6 +355,45 @@ reuses the original chronological X calculation and does not change node
 years, timeline mathematics, connection source/target relationships, or the
 underlying dataset.
 
+## Automatic upstream synchronization
+
+Upstream is Étienne Fortier-Dubois's
+[etiennefd/hhr-tech-tree](https://github.com/etiennefd/hhr-tech-tree). A
+GitHub Actions workflow,
+[`.github/workflows/sync-poster-print.yml`](.github/workflows/sync-poster-print.yml),
+keeps `poster-print` conservatively current with it:
+
+- It checks upstream once a week, Sunday morning Eastern Time, and can also
+  be triggered manually from the GitHub Actions tab (**Actions → Sync
+  poster-print with upstream → Run workflow**).
+- A clean merge is validated — dependency install, TypeScript type-check,
+  and a whitespace/conflict-marker check — before anything is pushed.
+  `npm run build` and `npm run lint` are intentionally not part of that
+  validation: the build script requires live Airtable credentials to
+  regenerate the gitignored, copyrighted `techtree-data.json`, which this
+  workflow must never fetch or fake; `next lint` is currently broken on
+  this branch for reasons unrelated to upstream sync (an ESLint 9 /
+  Next.js 16 configuration mismatch), so wiring it in would fail every run
+  regardless of merge quality.
+- If the merge conflicts, or if install/type-check/diff-check fails, the
+  workflow stops without pushing anything. Conflicts and failures require
+  manual review; the workflow never attempts automatic conflict
+  resolution.
+- The workflow never pushes to Étienne's repository, never force-pushes,
+  and never rewrites `poster-print` history — only ordinary merge commits
+  authored by `github-actions[bot]`.
+- Because it only runs weekly (plus whenever you trigger it manually),
+  `poster-print` showing up as some commits "behind" upstream between runs
+  is normal, not a problem.
+
+The workflow file itself lives on the fork's default branch (`main`)
+rather than on `poster-print`. This isn't a preference — GitHub Actions
+only evaluates `schedule` triggers (and only shows the manual **Run
+workflow** button) for workflow files that exist on the repository's
+default branch, regardless of which branch the workflow's own steps check
+out and act on. The workflow's steps still target `poster-print`
+exclusively.
+
 ## Upstream, licensing, and attribution
 
 The original Historical Tech Tree software is by Étienne Fortier-Dubois:
