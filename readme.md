@@ -8,6 +8,9 @@ PDF export, and a date-free student activity version. See
 [POSTER_PRINTING.md](POSTER_PRINTING.md) for setup, URLs, export commands, and
 classroom workflows.
 
+The branch also includes a GitHub Codespaces development setup; see the
+[Codespaces instructions](POSTER_PRINTING.md#github-codespaces).
+
 ## License
 
 **Code**: This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

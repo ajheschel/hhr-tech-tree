@@ -36,8 +36,12 @@ or redistribute the generated JSON from this fork.
 Install the JavaScript dependencies:
 
 ```bash
-npm install
+npm ci --legacy-peer-deps
 ```
+
+The legacy peer-dependency flag is currently required because the repository's
+React 19 release candidate predates the release candidate accepted by Next
+16's declared peer range.
 
 For bulk PDF export, install Playwright's Chromium browser once:
 
@@ -60,6 +64,51 @@ npm run dev
 The examples below assume the app is available at
 `http://localhost:3000`. The generated dataset, `.env` files, backups, and
 poster PDF output are excluded from source control.
+
+## GitHub Codespaces
+
+This branch includes a small devcontainer based on Node.js 22. To create a
+Codespace:
+
+1. Open the repository on the `poster-print` branch on GitHub.
+2. Choose **Code → Codespaces → Create codespace on poster-print**.
+3. Wait for the container setup and `npm ci --legacy-peer-deps` to finish.
+
+The Codespace intentionally starts without the private Historical Tech Tree
+dataset. It does not contact Airtable or download data during setup. Supply
+your authorized local copy manually:
+
+1. In the Codespaces Explorer, create the `private-data` directory at the
+   repository root if it is not already present.
+2. Upload your private `techtree-data.json` into that directory. The entire
+   directory is ignored by Git.
+3. Install it at the API's expected location:
+
+   ```bash
+   ./scripts/install-local-techtree-data.sh private-data/techtree-data.json
+   ```
+
+The helper verifies the source file, creates the destination directory if
+needed, and copies the file to
+`src/app/api/inventions/techtree-data.json`. Both the intake directory and the
+destination are ignored by Git. Never force-add either copy.
+
+Start the development server when you are ready:
+
+```bash
+npm run dev
+```
+
+Open the forwarded port named **Historical Tech Tree** in the Codespaces
+**Ports** panel. Codespaces exposes port 3000 through a forwarded browser URL,
+not through your own computer's `localhost:3000`. The server is not started
+automatically, so the Codespace finishes initialization with a normal shell.
+
+Source changes can be committed and pushed from the Codespace using its normal
+Git integration. The dataset remains a manual, private prerequisite and must
+not be committed. A rebuilt or newly created Codespace may require the file to
+be uploaded and installed again unless you deliberately preserve it somewhere
+outside Git.
 
 ## Normal interactive mode
 
