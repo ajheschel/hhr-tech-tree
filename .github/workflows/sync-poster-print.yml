@@ -66,6 +66,12 @@ jobs:
             echo "needs_sync=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Configure git identity for validation merge
+        if: steps.check.outputs.needs_sync == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Attempt local merge (staged only, never committed)
         if: steps.check.outputs.needs_sync == 'true'
         run: |
@@ -73,13 +79,33 @@ jobs:
           git merge --no-commit --no-ff "${{ steps.check.outputs.upstream_sha }}"
           status=$?
           set -e
-          if [ "$status" -ne 0 ]; then
-            echo "::error::Merge conflict merging upstream/main into poster-print. Conflicted files:"
-            git diff --name-only --diff-filter=U
-            git merge --abort
-            exit 1
+
+          if [ "$status" -eq 0 ]; then
+            echo "Local merge staged cleanly (no commit created)."
+            exit 0
           fi
-          echo "Local merge staged cleanly (no commit created)."
+
+          # A non-zero exit is not necessarily a content conflict (e.g. a
+          # missing git identity fails the merge before any conflict markers
+          # exist). Only call it a conflict if Git actually reports unmerged
+          # paths; otherwise surface the real cause and fail without a false
+          # "merge conflict" label.
+          conflicted=$(git diff --name-only --diff-filter=U || true)
+          if [ -n "$conflicted" ]; then
+            echo "::error::Merge conflict merging upstream/main into poster-print. Conflicted files:"
+            echo "$conflicted"
+          else
+            echo "::error::git merge failed for a reason other than a content conflict (no unmerged paths reported). See the git output above for the actual cause. Diagnostic info:"
+            git status
+          fi
+
+          # Only abort if a merge is actually in progress -- a failure before
+          # MERGE_HEAD was ever written (e.g. the identity error above) has
+          # nothing to abort, and `git merge --abort` would itself fail.
+          if [ -f .git/MERGE_HEAD ]; then
+            git merge --abort
+          fi
+          exit 1
 
       - name: Set up Node.js
         if: steps.check.outputs.needs_sync == 'true'
@@ -174,12 +200,24 @@ jobs:
             -m "Merges etiennefd/hhr-tech-tree@${{ needs.validate.outputs.upstream_sha }}, validated by the sync workflow (run ${{ github.run_id }})."
           status=$?
           set -e
-          if [ "$status" -ne 0 ]; then
-            echo "::error::Merge conflict reproducing the validated merge. Conflicted files:"
-            git diff --name-only --diff-filter=U
-            git merge --abort
-            exit 1
+
+          if [ "$status" -eq 0 ]; then
+            exit 0
           fi
+
+          conflicted=$(git diff --name-only --diff-filter=U || true)
+          if [ -n "$conflicted" ]; then
+            echo "::error::Merge conflict reproducing the validated merge. Conflicted files:"
+            echo "$conflicted"
+          else
+            echo "::error::git merge failed for a reason other than a content conflict (no unmerged paths reported). See the git output above for the actual cause. Diagnostic info:"
+            git status
+          fi
+
+          if [ -f .git/MERGE_HEAD ]; then
+            git merge --abort
+          fi
+          exit 1
 
       - name: Push to origin/poster-print
         run: git push origin HEAD:refs/heads/poster-print
