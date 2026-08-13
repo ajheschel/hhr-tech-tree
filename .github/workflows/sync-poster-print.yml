@@ -1,0 +1,185 @@
+name: Sync poster-print with upstream
+
+# Keeps the poster-print branch reasonably current with
+# etiennefd/hhr-tech-tree (upstream) without ever rewriting history,
+# force-pushing, or pushing to upstream itself. See POSTER_PRINTING.md
+# for the full explanation of why this file lives on the default branch.
+
+on:
+  schedule:
+    # Sunday ~6:17 AM America/New_York. An off-the-hour minute avoids the
+    # traffic spike every workflow scheduled "on the hour" contributes to.
+    - cron: "17 6 * * 0"
+      timezone: America/New_York
+  workflow_dispatch: {}
+
+concurrency:
+  # A single shared group serializes runs so two syncs can never touch
+  # poster-print at once. cancel-in-progress is false on purpose: if a
+  # run has already reached the push job, canceling it mid-push is more
+  # dangerous than letting it finish and queuing the next run behind it.
+  group: sync-poster-print
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: https://github.com/etiennefd/hhr-tech-tree.git
+
+jobs:
+  validate:
+    name: Validate upstream merge
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      needs_sync: ${{ steps.check.outputs.needs_sync }}
+      base_sha: ${{ steps.check.outputs.base_sha }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+    steps:
+      - name: Checkout poster-print
+        uses: actions/checkout@v4
+        with:
+          ref: poster-print
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Add and fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream main --quiet
+
+      - name: Determine whether a sync is needed
+        id: check
+        run: |
+          BASE_SHA=$(git rev-parse HEAD)
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            echo "poster-print already contains upstream/main ($UPSTREAM_SHA); no sync required."
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "poster-print ($BASE_SHA) is missing upstream commits up to $UPSTREAM_SHA."
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attempt local merge (staged only, never committed)
+        if: steps.check.outputs.needs_sync == 'true'
+        run: |
+          set +e
+          git merge --no-commit --no-ff "${{ steps.check.outputs.upstream_sha }}"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Merge conflict merging upstream/main into poster-print. Conflicted files:"
+            git diff --name-only --diff-filter=U
+            git merge --abort
+            exit 1
+          fi
+          echo "Local merge staged cleanly (no commit created)."
+
+      - name: Set up Node.js
+        if: steps.check.outputs.needs_sync == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.check.outputs.needs_sync == 'true'
+        run: npm ci --legacy-peer-deps
+
+      - name: Type-check
+        if: steps.check.outputs.needs_sync == 'true'
+        run: npx tsc --noEmit
+
+      - name: Check for whitespace errors / leftover conflict markers
+        if: steps.check.outputs.needs_sync == 'true'
+        run: git diff --check HEAD
+
+      # NOTE: no `npm run lint` and no `npm run build` here, by design:
+      #
+      # - `npm run build` runs src/scripts/fetch-and-save-inventions.ts
+      #   first, which requires live Airtable credentials and produces the
+      #   gitignored/copyrighted src/app/api/inventions/techtree-data.json.
+      #   This workflow must never fetch, fake, or commit that dataset.
+      #
+      # - `npm run lint` (`next lint`) is currently broken on this branch
+      #   independent of upstream sync: Next.js 16.3.0's CLI no longer
+      #   recognizes the `lint` subcommand the way eslint-config-next
+      #   15.0.3 expects, and running `eslint .` directly fails too since
+      #   ESLint 9 requires a flat eslint.config.js while this repo still
+      #   ships a legacy .eslintrc.json. This reproduces identically on
+      #   the unmerged branch, so it is a pre-existing repo issue, not
+      #   something this workflow should paper over or fix as a side
+      #   effect of a sync run. Wiring a permanently-broken lint into this
+      #   gate would fail every sync regardless of merge quality.
+      #
+      # `npm ci` succeeding plus a clean type-check and diff-check are the
+      # strongest dataset-independent validation currently available.
+
+      - name: Abort the local merge (validation never persists a commit)
+        if: always() && steps.check.outputs.needs_sync == 'true'
+        run: |
+          if [ -f .git/MERGE_HEAD ]; then
+            git merge --abort
+          fi
+
+  merge-and-push:
+    name: Merge and push validated sync
+    needs: validate
+    if: needs.validate.outputs.needs_sync == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout poster-print
+        uses: actions/checkout@v4
+        with:
+          ref: poster-print
+          fetch-depth: 0
+
+      - name: Verify poster-print has not moved since validation
+        run: |
+          current_sha=$(git rev-parse HEAD)
+          expected_sha="${{ needs.validate.outputs.base_sha }}"
+          if [ "$current_sha" != "$expected_sha" ]; then
+            echo "::error::poster-print moved from $expected_sha to $current_sha after validation. Stopping without pushing so a later run can retry from the new state."
+            exit 1
+          fi
+
+      - name: Add and fetch upstream, verify validated commit
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream main --quiet
+          upstream_sha="${{ needs.validate.outputs.upstream_sha }}"
+          if ! git cat-file -e "${upstream_sha}^{commit}" 2>/dev/null; then
+            echo "::error::Validated upstream commit $upstream_sha is no longer reachable from upstream/main."
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Reproduce the validated merge
+        run: |
+          set +e
+          git merge --no-ff "${{ needs.validate.outputs.upstream_sha }}" \
+            -m "Merge upstream main into poster-print" \
+            -m "Merges etiennefd/hhr-tech-tree@${{ needs.validate.outputs.upstream_sha }}, validated by the sync workflow (run ${{ github.run_id }})."
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Merge conflict reproducing the validated merge. Conflicted files:"
+            git diff --name-only --diff-filter=U
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Push to origin/poster-print
+        run: git push origin HEAD:refs/heads/poster-print
